@@ -3,7 +3,7 @@ NAME = msh
 CC = gcc
 CFLAGS = -Wall -Wextra -Werror -std=c11
 
-SRC = src/main.c
+SRC = src/main.c src/builtins.c
 OBJ = $(SRC:.c=.o)
 
 all: $(NAME)

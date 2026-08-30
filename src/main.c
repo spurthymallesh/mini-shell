@@ -1,12 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-
-#define INPUT_SIZE 1024
-#define MAX_ARGS 64
+#include "minishell.h"
 
 int main(void)
 {
@@ -42,27 +34,36 @@ int main(void)
 
         args[argc] = NULL;
 
-        pid_t pid = fork();
+        int command_type = check_command_type(args[0]);
 
-        if (pid < 0)
+        if (command_type == BUILTIN)
         {
-            perror("fork");
-            continue;
+            execute_builtin(args);
         }
-
-        if (pid == 0)
+        else if (command_type == EXTERNAL)
         {
-            execvp(args[0], args);
+            pid_t pid = fork();
 
-            perror("execvp");
-            exit(EXIT_FAILURE);
-        }
+            if (pid < 0)
+            {
+                perror("fork");
+                continue;
+            }
 
-        int status;
+            if (pid == 0)
+            {
+                execvp(args[0], args);
 
-        if (waitpid(pid, &status, 0) < 0)
-        {
-            perror("waitpid");
+                perror("execvp");
+                exit(EXIT_FAILURE);
+            }
+
+            int status;
+
+            if (waitpid(pid, &status, 0) < 0)
+            {
+                perror("waitpid");
+            }
         }
     }
 
