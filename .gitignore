@@ -1,0 +1,7 @@
+msh
+*.o
+*.out
+build/
+.vscode/
+.idea/
+*.swp
