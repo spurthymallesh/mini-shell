@@ -15,8 +15,10 @@
 #define EXTERNAL 2
 #define NO_COMMAND 3
 
+extern int last_exit_status;
+
 int check_command_type(char *command);
-void execute_builtin(char **args);
+int execute_builtin(char **args);
 void execute_external(char **args);
 
 #endif
