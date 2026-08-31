@@ -1,4 +1,5 @@
 #include "minishell.h"
+#include <errno.h>
 
 int last_exit_status = 0;
 char prompt[INPUT_SIZE] = "msh> ";
@@ -7,9 +8,13 @@ pid_t foreground_pid = -1;
 job_t jobs[MAX_JOBS];
 int job_count = 0;
 
+volatile sig_atomic_t child_event_count = 0;
+pid_t completed_pids[MAX_COMPLETED_JOBS];
+int completed_status[MAX_COMPLETED_JOBS];
+
 static void install_signal_handlers(void);
 static int tokenize_input(char *input, char **args);
-static void add_job(pid_t pid, job_state state, const char *command);
+// static void add_job(pid_t pid, job_state state, const char *command);
 
 int main(void)
 {
@@ -20,15 +25,23 @@ int main(void)
     install_signal_handlers();
 
     while (1)
-    {
-        printf("%s", prompt);
-        fflush(stdout);
+{
+    process_child_events();
 
-        if (fgets(input, sizeof(input), stdin) == NULL)
-        {
-            printf("\n");
-            break;
-        }
+    printf("%s", prompt);
+    fflush(stdout);
+
+    if (fgets(input, sizeof(input), stdin) == NULL)
+{
+    if (errno == EINTR)
+    {
+        process_child_events();
+        continue;
+    }
+
+    printf("\n");
+    break;
+}
 
         input[strcspn(input, "\n")] = '\0';
 
@@ -271,6 +284,14 @@ static void install_signal_handlers(void)
 
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTSTP, &sa, NULL);
+
+    /*
+     * SIGCHLD should interrupt fgets() so that
+     * the shell can process completed background jobs.
+     */
+    sa.sa_flags = 0;
+
+    sigaction(SIGCHLD, &sa, NULL);
 }
 
 
@@ -308,26 +329,60 @@ static int tokenize_input(char *input, char **args)
 }
 
 
-/*
- * Add a process to the job table.
- */
-static void add_job(pid_t pid,
-                     job_state state,
-                     const char *command)
+void process_child_events(void)
 {
-    if (job_count >= MAX_JOBS)
+    sig_atomic_t count;
+    int i;
+
+    count = child_event_count;
+
+    for (i = 0; i < count; i++)
     {
-        return;
+        pid_t pid;
+        int status;
+        int index;
+        int exit_status;
+
+        pid = completed_pids[i];
+        status = completed_status[i];
+
+        index = find_job_by_pid(pid);
+
+        if (index == -1)
+        {
+            continue;
+        }
+
+        if (WIFEXITED(status))
+        {
+            exit_status = WEXITSTATUS(status);
+
+            printf("\n[%d] Done %s (exit status: %d)\n",
+                   jobs[index].job_id,
+                   jobs[index].command,
+                   exit_status);
+
+            last_exit_status = exit_status;
+        }
+        else if (WIFSIGNALED(status))
+        {
+            exit_status = 128 + WTERMSIG(status);
+
+            printf("\n[%d] Terminated %s (exit status: %d)\n",
+                   jobs[index].job_id,
+                   jobs[index].command,
+                   exit_status);
+
+            last_exit_status = exit_status;
+        }
+
+        fflush(stdout);
+
+        remove_job(index);
     }
 
-    jobs[job_count].job_id = job_count + 1;
-    jobs[job_count].pid = pid;
-    jobs[job_count].state = state;
-
-    snprintf(jobs[job_count].command,
-             sizeof(jobs[job_count].command),
-             "%s",
-             command);
-
-    job_count++;
+    /*
+     * All events have now been processed.
+     */
+    child_event_count = 0;
 }
