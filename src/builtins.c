@@ -15,7 +15,8 @@ int check_command_type(char *command)
         strcmp(command, "pwd") == 0 ||
         strcmp(command, "echo") == 0 ||
         strcmp(command, "exit") == 0 ||
-        strcmp(command, "jobs") == 0)
+        strcmp(command, "jobs") == 0 ||
+        strcmp(command, "bg") == 0)
     {
         return BUILTIN;
     }
@@ -107,6 +108,11 @@ int execute_builtin(char **args)
     else if (strcmp(args[0], "jobs") == 0)
 {
     return execute_jobs();
+}
+
+else if (strcmp(args[0], "bg") == 0)
+{
+    return execute_bg(args);
 }
 
     return 1;

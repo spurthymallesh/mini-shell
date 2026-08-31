@@ -26,21 +26,13 @@ int main(void)
 
     while (1)
     {
-        /*
-         * Process any background child events that
-         * were collected by the SIGCHLD handler.
-         */
+    
         process_child_events();
 
-        /*
-         * Display shell prompt.
-         */
+    
         printf("%s", prompt);
         fflush(stdout);
 
-        /*
-         * Read command from user.
-         */
         if (fgets(input, sizeof(input), stdin) == NULL)
         {
             /*
@@ -271,16 +263,6 @@ int main(void)
 
             foreground_pid = pid;
 
-            /*
-             * Wait for foreground child.
-             *
-             * WUNTRACED is required so that waitpid()
-             * reports when the child is stopped by SIGTSTP.
-             *
-             * A SIGCHLD can interrupt waitpid(), producing
-             * errno == EINTR. In that case we call waitpid()
-             * again.
-             */
             while (1)
             {
                 pid_t result;
