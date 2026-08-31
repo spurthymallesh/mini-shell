@@ -16,9 +16,11 @@
 #define NO_COMMAND 3
 
 extern int last_exit_status;
+extern char prompt[INPUT_SIZE];
 
 int check_command_type(char *command);
 int execute_builtin(char **args);
 void execute_external(char **args);
+void handle_prompt_assignment(char *input);
 
 #endif

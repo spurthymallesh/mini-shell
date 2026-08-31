@@ -1,6 +1,7 @@
 #include "minishell.h"
 
 int last_exit_status = 0;
+char prompt[INPUT_SIZE] = "msh> ";
 
 int main(void)
 {
@@ -9,7 +10,7 @@ int main(void)
 
     while (1)
     {
-        printf("msh> ");
+        printf("%s", prompt);
         fflush(stdout);
 
         if (fgets(input, sizeof(input), stdin) == NULL)
@@ -24,6 +25,15 @@ int main(void)
         {
             continue;
         }
+
+        if (strncmp(input, "PS1=", 4) == 0)
+{
+    handle_prompt_assignment(input);
+    last_exit_status = 0;
+    continue;
+}
+
+/* tokenize command */
 
         int argc = 0;
         char *token = strtok(input, " ");
