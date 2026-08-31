@@ -80,6 +80,15 @@ int main(void)
         }
 
         /*
+ * Check for pipe functionality.
+ */
+if (strchr(input, '|') != NULL)
+{
+    last_exit_status = execute_pipeline(input);
+    continue;
+}
+
+        /*
          * Save original command before strtok()
          * modifies input.
          */
