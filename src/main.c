@@ -2,11 +2,21 @@
 
 int last_exit_status = 0;
 char prompt[INPUT_SIZE] = "msh> ";
+pid_t foreground_pid = -1;
 
 int main(void)
 {
     char input[INPUT_SIZE];
     char *args[MAX_ARGS];
+
+    struct sigaction sa;
+
+sa.sa_handler = signal_handler;
+sigemptyset(&sa.sa_mask);
+sa.sa_flags = SA_RESTART;
+
+sigaction(SIGINT, &sa, NULL);
+sigaction(SIGTSTP, &sa, NULL);
 
     while (1)
     {
@@ -62,17 +72,21 @@ int main(void)
                 continue;
             }
 
-            if (pid == 0)
-            {
-                execvp(args[0], args);
+           if (pid == 0)
+{
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
 
-                perror("execvp");
-                exit(EXIT_FAILURE);
-            }
+    execvp(args[0], args);
 
-            int status;
+    perror("execvp");
+    exit(EXIT_FAILURE);
+}
+foreground_pid = pid;
 
-if (waitpid(pid, &status, 0) < 0)
+int status;
+
+if (waitpid(pid, &status, WUNTRACED) < 0)
 {
     perror("waitpid");
     last_exit_status = 1;
@@ -85,6 +99,13 @@ else if (WIFSIGNALED(status))
 {
     last_exit_status = 128 + WTERMSIG(status);
 }
+else if (WIFSTOPPED(status))
+{
+    printf("\n[%d] Stopped\n", pid);
+    fflush(stdout);
+}
+
+foreground_pid = -1;
         }
     }
 
