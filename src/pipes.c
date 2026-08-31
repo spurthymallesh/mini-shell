@@ -79,10 +79,7 @@ int execute_pipeline(char *input)
 
         if (pids[i] == 0)
         {
-            /*
-             * If this is not the first command,
-             * read from previous pipe.
-             */
+           
             if (previous_fd != -1)
             {
                 if (dup2(previous_fd, STDIN_FILENO) < 0)
@@ -92,10 +89,7 @@ int execute_pipeline(char *input)
                 }
             }
 
-            /*
-             * If this is not the last command,
-             * write to current pipe.
-             */
+            
             if (i < command_count - 1)
             {
                 if (dup2(pipefd[1], STDOUT_FILENO) < 0)
@@ -105,9 +99,7 @@ int execute_pipeline(char *input)
                 }
             }
 
-            /*
-             * Close unused descriptors.
-             */
+            
             if (previous_fd != -1)
             {
                 close(previous_fd);
@@ -119,9 +111,6 @@ int execute_pipeline(char *input)
                 close(pipefd[1]);
             }
 
-            /*
-             * Restore default signals.
-             */
             signal(SIGINT, SIG_DFL);
             signal(SIGTSTP, SIG_DFL);
 
@@ -135,18 +124,12 @@ int execute_pipeline(char *input)
          * Parent process.
          */
 
-        /*
-         * Previous pipe is no longer needed by parent.
-         */
         if (previous_fd != -1)
         {
             close(previous_fd);
         }
 
-        /*
-         * Save read end of current pipe
-         * for the next command.
-         */
+       
         if (i < command_count - 1)
         {
             close(pipefd[1]);
@@ -180,9 +163,6 @@ int execute_pipeline(char *input)
         }
     }
 
-    /*
-     * Store exit status of the last command.
-     */
     if (WIFEXITED(status))
     {
         last_exit_status = WEXITSTATUS(status);
