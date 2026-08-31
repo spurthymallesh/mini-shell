@@ -16,6 +16,25 @@
 #define EXTERNAL 2
 #define NO_COMMAND 3
 
+#define MAX_JOBS 100
+
+typedef enum
+{
+    JOB_RUNNING,
+    JOB_STOPPED
+} job_state;
+
+typedef struct
+{
+    int job_id;
+    pid_t pid;
+    job_state state;
+    char command[INPUT_SIZE];
+} job_t;
+
+extern job_t jobs[MAX_JOBS];
+extern int job_count;
+
 extern int last_exit_status;
 extern char prompt[INPUT_SIZE];
 extern pid_t foreground_pid;

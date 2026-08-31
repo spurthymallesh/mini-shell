@@ -4,19 +4,20 @@ int last_exit_status = 0;
 char prompt[INPUT_SIZE] = "msh> ";
 pid_t foreground_pid = -1;
 
+job_t jobs[MAX_JOBS];
+int job_count = 0;
+
+static void install_signal_handlers(void);
+static int tokenize_input(char *input, char **args);
+static void add_job(pid_t pid, job_state state, const char *command);
+
 int main(void)
 {
     char input[INPUT_SIZE];
+    char original_command[INPUT_SIZE];
     char *args[MAX_ARGS];
 
-    struct sigaction sa;
-
-sa.sa_handler = signal_handler;
-sigemptyset(&sa.sa_mask);
-sa.sa_flags = SA_RESTART;
-
-sigaction(SIGINT, &sa, NULL);
-sigaction(SIGTSTP, &sa, NULL);
+    install_signal_handlers();
 
     while (1)
     {
@@ -31,83 +32,302 @@ sigaction(SIGTSTP, &sa, NULL);
 
         input[strcspn(input, "\n")] = '\0';
 
-        if (strlen(input) == 0)
+        /* Ignore empty input */
+        if (input[0] == '\0')
         {
             continue;
         }
 
+        /*
+         * Handle PS1 assignment.
+         *
+         * Valid:
+         *     PS1=hello
+         *
+         * Invalid:
+         *     PS1 = hello
+         */
         if (strncmp(input, "PS1=", 4) == 0)
-{
-    handle_prompt_assignment(input);
-    last_exit_status = 0;
-    continue;
-}
-
-/* tokenize command */
-
-        int argc = 0;
-        char *token = strtok(input, " ");
-
-        while (token != NULL && argc < MAX_ARGS - 1)
         {
-            args[argc++] = token;
-            token = strtok(NULL, " ");
+            handle_prompt_assignment(input);
+            last_exit_status = 0;
+            continue;
         }
 
-        args[argc] = NULL;
+        /*
+         * Save original command before strtok()
+         * modifies input.
+         */
+        snprintf(original_command,
+                 sizeof(original_command),
+                 "%s",
+                 input);
 
+        /*
+         * Tokenize input.
+         */
+        if (tokenize_input(input, args) == 0)
+        {
+            continue;
+        }
+
+        /*
+         * Check whether command is a background command.
+         *
+         * Example:
+         *
+         *     sleep 20 &
+         *
+         * Before:
+         *
+         *     args[0] = sleep
+         *     args[1] = 20
+         *     args[2] = &
+         *
+         * After:
+         *
+         *     args[0] = sleep
+         *     args[1] = 20
+         *     args[2] = NULL
+         */
+        int background = 0;
+        int last = 0;
+
+        while (args[last] != NULL)
+        {
+            last++;
+        }
+
+        if (last > 0 && strcmp(args[last - 1], "&") == 0)
+        {
+            background = 1;
+            args[last - 1] = NULL;
+        }
+
+        /*
+         * Identify builtin/external command.
+         */
         int command_type = check_command_type(args[0]);
 
-       if (command_type == BUILTIN)
-{
-    last_exit_status = execute_builtin(args);
-}
+        /*
+         * Built-in commands execute inside msh.
+         */
+        if (command_type == BUILTIN)
+        {
+            /*
+             * We don't support builtins in background
+             * at this stage.
+             */
+            if (background)
+            {
+                fprintf(stderr,
+                        "msh: background execution of built-in "
+                        "commands is not supported\n");
+
+                last_exit_status = 1;
+                continue;
+            }
+
+            last_exit_status = execute_builtin(args);
+        }
+
+        /*
+         * External command.
+         */
         else if (command_type == EXTERNAL)
         {
-            pid_t pid = fork();
+            pid_t pid;
+            int status;
+
+            pid = fork();
 
             if (pid < 0)
             {
                 perror("fork");
+                last_exit_status = 1;
                 continue;
             }
 
-           if (pid == 0)
-{
-    signal(SIGINT, SIG_DFL);
-    signal(SIGTSTP, SIG_DFL);
+            /*
+             * Child process.
+             */
+            if (pid == 0)
+            {
+                /*
+                 * Restore default signal behavior for child.
+                 */
+                signal(SIGINT, SIG_DFL);
+                signal(SIGTSTP, SIG_DFL);
 
-    execvp(args[0], args);
+                execvp(args[0], args);
 
-    perror("execvp");
-    exit(EXIT_FAILURE);
-}
-foreground_pid = pid;
+                perror("execvp");
+                exit(EXIT_FAILURE);
+            }
 
-int status;
+            /*
+             * Parent process.
+             */
 
-if (waitpid(pid, &status, WUNTRACED) < 0)
-{
-    perror("waitpid");
-    last_exit_status = 1;
-}
-else if (WIFEXITED(status))
-{
-    last_exit_status = WEXITSTATUS(status);
-}
-else if (WIFSIGNALED(status))
-{
-    last_exit_status = 128 + WTERMSIG(status);
-}
-else if (WIFSTOPPED(status))
-{
-    printf("\n[%d] Stopped\n", pid);
-    fflush(stdout);
-}
+            /*
+             * BACKGROUND PROCESS
+             *
+             * Do not wait for the child.
+             */
+            if (background)
+            {
+                if (job_count >= MAX_JOBS)
+                {
+                    fprintf(stderr,
+                            "msh: maximum number of jobs reached\n");
 
-foreground_pid = -1;
+                    kill(pid, SIGTERM);
+                    waitpid(pid, NULL, 0);
+
+                    last_exit_status = 1;
+                    continue;
+                }
+
+                add_job(pid, JOB_RUNNING, original_command);
+
+                printf("[%d] %d\n",
+                       jobs[job_count - 1].job_id,
+                       pid);
+
+                fflush(stdout);
+
+                /*
+                 * Background command was successfully
+                 * started.
+                 */
+                last_exit_status = 0;
+
+                continue;
+            }
+
+            /*
+             * FOREGROUND PROCESS
+             */
+            foreground_pid = pid;
+
+            if (waitpid(pid, &status, WUNTRACED) < 0)
+            {
+                perror("waitpid");
+                last_exit_status = 1;
+            }
+            else if (WIFEXITED(status))
+            {
+                /*
+                 * Child terminated normally.
+                 */
+                last_exit_status = WEXITSTATUS(status);
+            }
+            else if (WIFSIGNALED(status))
+            {
+                /*
+                 * Child terminated because of a signal.
+                 */
+                last_exit_status = 128 + WTERMSIG(status);
+            }
+            else if (WIFSTOPPED(status))
+            {
+                /*
+                 * Child was stopped using Ctrl+Z.
+                 *
+                 * Save it in the job table so that
+                 * bg/fg can use it later.
+                 */
+                add_job(pid, JOB_STOPPED, original_command);
+
+                printf("\n[%d] Stopped\n", pid);
+                fflush(stdout);
+            }
+
+            /*
+             * No foreground process now.
+             */
+            foreground_pid = -1;
         }
     }
 
     return 0;
+}
+
+
+/*
+ * Install signal handlers for msh.
+ */
+static void install_signal_handlers(void)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+
+    sa.sa_handler = signal_handler;
+
+    sigemptyset(&sa.sa_mask);
+
+    sa.sa_flags = SA_RESTART;
+
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTSTP, &sa, NULL);
+}
+
+
+/*
+ * Tokenize command line.
+ *
+ * Example:
+ *
+ *     ls -l /tmp
+ *
+ * becomes:
+ *
+ *     args[0] = "ls"
+ *     args[1] = "-l"
+ *     args[2] = "/tmp"
+ *     args[3] = NULL
+ */
+static int tokenize_input(char *input, char **args)
+{
+    int count = 0;
+    char *token;
+
+    token = strtok(input, " \t");
+
+    while (token != NULL && count < MAX_ARGS - 1)
+    {
+        args[count++] = token;
+
+        token = strtok(NULL, " \t");
+    }
+
+    args[count] = NULL;
+
+    return count;
+}
+
+
+/*
+ * Add a process to the job table.
+ */
+static void add_job(pid_t pid,
+                     job_state state,
+                     const char *command)
+{
+    if (job_count >= MAX_JOBS)
+    {
+        return;
+    }
+
+    jobs[job_count].job_id = job_count + 1;
+    jobs[job_count].pid = pid;
+    jobs[job_count].state = state;
+
+    snprintf(jobs[job_count].command,
+             sizeof(jobs[job_count].command),
+             "%s",
+             command);
+
+    job_count++;
 }
