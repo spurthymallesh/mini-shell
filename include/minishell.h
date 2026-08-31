@@ -65,5 +65,6 @@ int find_job_by_pid(pid_t pid);
 void remove_job(int index);
 void update_job_state(pid_t pid, job_state state);
 void process_child_events(void);
+int execute_jobs(void);
 
 #endif

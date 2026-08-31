@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
+// #define _POSIX_C_SOURCE 200809L
 
 #include "minishell.h"
 
@@ -14,7 +14,8 @@ int check_command_type(char *command)
     if (strcmp(command, "cd") == 0 ||
         strcmp(command, "pwd") == 0 ||
         strcmp(command, "echo") == 0 ||
-        strcmp(command, "exit") == 0)
+        strcmp(command, "exit") == 0 ||
+        strcmp(command, "jobs") == 0)
     {
         return BUILTIN;
     }
@@ -102,6 +103,11 @@ int execute_builtin(char **args)
     {
         exit(EXIT_SUCCESS);
     }
+
+    else if (strcmp(args[0], "jobs") == 0)
+{
+    return execute_jobs();
+}
 
     return 1;
 }

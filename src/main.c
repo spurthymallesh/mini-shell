@@ -14,7 +14,7 @@ int completed_status[MAX_COMPLETED_JOBS];
 
 static void install_signal_handlers(void);
 static int tokenize_input(char *input, char **args);
-// static void add_job(pid_t pid, job_state state, const char *command);
+
 
 int main(void)
 {
@@ -25,40 +25,60 @@ int main(void)
     install_signal_handlers();
 
     while (1)
-{
-    process_child_events();
-
-    printf("%s", prompt);
-    fflush(stdout);
-
-    if (fgets(input, sizeof(input), stdin) == NULL)
-{
-    if (errno == EINTR)
     {
+        /*
+         * Process any background child events that
+         * were collected by the SIGCHLD handler.
+         */
         process_child_events();
-        continue;
-    }
 
-    printf("\n");
-    break;
-}
+        /*
+         * Display shell prompt.
+         */
+        printf("%s", prompt);
+        fflush(stdout);
 
+        /*
+         * Read command from user.
+         */
+        if (fgets(input, sizeof(input), stdin) == NULL)
+        {
+            /*
+             * Signal interrupted fgets().
+             * Re-display prompt.
+             */
+            if (errno == EINTR)
+            {
+                clearerr(stdin);
+                process_child_events();
+                continue;
+            }
+
+            /*
+             * EOF / Ctrl+D.
+             */
+            printf("\n");
+            break;
+        }
+
+        /*
+         * Remove trailing newline.
+         */
         input[strcspn(input, "\n")] = '\0';
 
-        /* Ignore empty input */
+        /*
+         * Ignore empty commands.
+         */
         if (input[0] == '\0')
         {
             continue;
         }
 
         /*
-         * Handle PS1 assignment.
+         * Handle PS1=NEW_PROMPT.
          *
-         * Valid:
-         *     PS1=hello
-         *
-         * Invalid:
-         *     PS1 = hello
+         * Only PS1= without spaces is treated as
+         * prompt assignment.
          */
         if (strncmp(input, "PS1=", 4) == 0)
         {
@@ -77,7 +97,7 @@ int main(void)
                  input);
 
         /*
-         * Tokenize input.
+         * Tokenize command line.
          */
         if (tokenize_input(input, args) == 0)
         {
@@ -85,23 +105,17 @@ int main(void)
         }
 
         /*
-         * Check whether command is a background command.
+         * Check whether command is running in background.
          *
          * Example:
          *
-         *     sleep 20 &
+         * sleep 20 &
          *
-         * Before:
+         * becomes:
          *
-         *     args[0] = sleep
-         *     args[1] = 20
-         *     args[2] = &
-         *
-         * After:
-         *
-         *     args[0] = sleep
-         *     args[1] = 20
-         *     args[2] = NULL
+         * args[0] = "sleep"
+         * args[1] = "20"
+         * args[2] = NULL
          */
         int background = 0;
         int last = 0;
@@ -118,18 +132,20 @@ int main(void)
         }
 
         /*
-         * Identify builtin/external command.
+         * Identify command type.
          */
         int command_type = check_command_type(args[0]);
 
         /*
-         * Built-in commands execute inside msh.
+         * -------------------------------------------------
+         * BUILT-IN COMMAND
+         * -------------------------------------------------
          */
         if (command_type == BUILTIN)
         {
             /*
-             * We don't support builtins in background
-             * at this stage.
+             * At this stage built-ins are executed only
+             * in the foreground.
              */
             if (background)
             {
@@ -145,13 +161,18 @@ int main(void)
         }
 
         /*
-         * External command.
+         * -------------------------------------------------
+         * EXTERNAL COMMAND
+         * -------------------------------------------------
          */
         else if (command_type == EXTERNAL)
         {
             pid_t pid;
             int status;
 
+            /*
+             * Create child process.
+             */
             pid = fork();
 
             if (pid < 0)
@@ -162,47 +183,72 @@ int main(void)
             }
 
             /*
-             * Child process.
+             * -------------------------------------------------
+             * CHILD PROCESS
+             * -------------------------------------------------
              */
             if (pid == 0)
             {
                 /*
-                 * Restore default signal behavior for child.
+                 * Child should receive normal terminal signals.
                  */
                 signal(SIGINT, SIG_DFL);
                 signal(SIGTSTP, SIG_DFL);
+                signal(SIGCHLD, SIG_DFL);
 
+                /*
+                 * Execute external command.
+                 */
                 execvp(args[0], args);
 
+                /*
+                 * execvp() failed.
+                 */
                 perror("execvp");
                 exit(EXIT_FAILURE);
             }
 
             /*
-             * Parent process.
-             */
-
-            /*
+             * -------------------------------------------------
              * BACKGROUND PROCESS
-             *
-             * Do not wait for the child.
+             * -------------------------------------------------
              */
             if (background)
             {
+                /*
+                 * Make sure there is room in job table.
+                 */
                 if (job_count >= MAX_JOBS)
                 {
                     fprintf(stderr,
                             "msh: maximum number of jobs reached\n");
 
                     kill(pid, SIGTERM);
-                    waitpid(pid, NULL, 0);
+
+                    /*
+                     * Reap child so that it does not become
+                     * a zombie.
+                     */
+                    while (waitpid(pid, NULL, 0) < 0)
+                    {
+                        if (errno != EINTR)
+                        {
+                            break;
+                        }
+                    }
 
                     last_exit_status = 1;
                     continue;
                 }
 
+                /*
+                 * Add background process to job table.
+                 */
                 add_job(pid, JOB_RUNNING, original_command);
 
+                /*
+                 * Print job number and PID.
+                 */
                 printf("[%d] %d\n",
                        jobs[job_count - 1].job_id,
                        pid);
@@ -210,8 +256,7 @@ int main(void)
                 fflush(stdout);
 
                 /*
-                 * Background command was successfully
-                 * started.
+                 * Background command was successfully started.
                  */
                 last_exit_status = 0;
 
@@ -219,40 +264,98 @@ int main(void)
             }
 
             /*
+             * -------------------------------------------------
              * FOREGROUND PROCESS
+             * -------------------------------------------------
              */
+
             foreground_pid = pid;
 
-            if (waitpid(pid, &status, WUNTRACED) < 0)
+            /*
+             * Wait for foreground child.
+             *
+             * WUNTRACED is required so that waitpid()
+             * reports when the child is stopped by SIGTSTP.
+             *
+             * A SIGCHLD can interrupt waitpid(), producing
+             * errno == EINTR. In that case we call waitpid()
+             * again.
+             */
+            while (1)
             {
-                perror("waitpid");
-                last_exit_status = 1;
+                pid_t result;
+
+                result = waitpid(pid, &status, WUNTRACED);
+
+                if (result == pid)
+                {
+                    /*
+                     * Child state has been received.
+                     */
+                    break;
+                }
+
+                if (result < 0 && errno == EINTR)
+                {
+                    /*
+                     * Signal interrupted waitpid().
+                     * Try again.
+                     */
+                    continue;
+                }
+
+                if (result < 0)
+                {
+                    perror("waitpid");
+                    last_exit_status = 1;
+                    break;
+                }
             }
-            else if (WIFEXITED(status))
+
+            /*
+             * -------------------------------------------------
+             * PROCESS EXIT STATUS
+             * -------------------------------------------------
+             */
+
+            if (WIFEXITED(status))
             {
                 /*
-                 * Child terminated normally.
+                 * Child exited normally.
                  */
                 last_exit_status = WEXITSTATUS(status);
             }
             else if (WIFSIGNALED(status))
             {
                 /*
-                 * Child terminated because of a signal.
+                 * Child was terminated by a signal.
+                 *
+                 * Shell convention:
+                 * exit status = 128 + signal number
                  */
                 last_exit_status = 128 + WTERMSIG(status);
             }
             else if (WIFSTOPPED(status))
             {
                 /*
-                 * Child was stopped using Ctrl+Z.
+                 * Child was stopped by Ctrl+Z.
                  *
-                 * Save it in the job table so that
+                 * Add it to the job table so that
                  * bg/fg can use it later.
                  */
-                add_job(pid, JOB_STOPPED, original_command);
+                if (job_count < MAX_JOBS)
+                {
+                    add_job(pid, JOB_STOPPED, original_command);
 
-                printf("\n[%d] Stopped\n", pid);
+                    printf("\n[%d] Stopped\n",
+                           jobs[job_count - 1].job_id);
+                }
+                else
+                {
+                    fprintf(stderr,
+                            "\nmsh: maximum number of jobs reached\n");
+                }
+
                 fflush(stdout);
             }
 
@@ -261,6 +364,15 @@ int main(void)
              */
             foreground_pid = -1;
         }
+
+        /*
+         * If command was not recognized for some reason,
+         * keep the shell alive.
+         */
+        else if (command_type == NO_COMMAND)
+        {
+            continue;
+        }
     }
 
     return 0;
@@ -268,7 +380,9 @@ int main(void)
 
 
 /*
- * Install signal handlers for msh.
+ * ---------------------------------------------------------
+ * INSTALL SIGNAL HANDLERS
+ * ---------------------------------------------------------
  */
 static void install_signal_handlers(void)
 {
@@ -276,27 +390,39 @@ static void install_signal_handlers(void)
 
     memset(&sa, 0, sizeof(sa));
 
+    /*
+     * Shell signal handler.
+     */
     sa.sa_handler = signal_handler;
 
     sigemptyset(&sa.sa_mask);
 
-    sa.sa_flags = SA_RESTART;
+    /*
+     * Do NOT use SA_RESTART here.
+     *
+     * We want SIGINT/SIGTSTP/SIGCHLD to interrupt
+     * fgets()/waitpid() so that the shell can react
+     * immediately.
+     */
+    sa.sa_flags = 0;
 
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTSTP, &sa, NULL);
 
     /*
-     * SIGCHLD should interrupt fgets() so that
-     * the shell can process completed background jobs.
+     * SIGCHLD handler.
+     *
+     * When a background child terminates, SIGCHLD
+     * allows the shell to collect its exit status.
      */
-    sa.sa_flags = 0;
-
     sigaction(SIGCHLD, &sa, NULL);
 }
 
 
 /*
- * Tokenize command line.
+ * ---------------------------------------------------------
+ * TOKENIZE INPUT
+ * ---------------------------------------------------------
  *
  * Example:
  *
@@ -308,6 +434,7 @@ static void install_signal_handlers(void)
  *     args[1] = "-l"
  *     args[2] = "/tmp"
  *     args[3] = NULL
+ *
  */
 static int tokenize_input(char *input, char **args)
 {
@@ -329,6 +456,11 @@ static int tokenize_input(char *input, char **args)
 }
 
 
+/*
+ * ---------------------------------------------------------
+ * PROCESS COMPLETED BACKGROUND CHILDREN
+ * ---------------------------------------------------------
+ */
 void process_child_events(void)
 {
     sig_atomic_t count;
@@ -346,6 +478,9 @@ void process_child_events(void)
         pid = completed_pids[i];
         status = completed_status[i];
 
+        /*
+         * Find child in job table.
+         */
         index = find_job_by_pid(pid);
 
         if (index == -1)
@@ -353,6 +488,9 @@ void process_child_events(void)
             continue;
         }
 
+        /*
+         * Child exited normally.
+         */
         if (WIFEXITED(status))
         {
             exit_status = WEXITSTATUS(status);
@@ -364,6 +502,10 @@ void process_child_events(void)
 
             last_exit_status = exit_status;
         }
+
+        /*
+         * Child was terminated by a signal.
+         */
         else if (WIFSIGNALED(status))
         {
             exit_status = 128 + WTERMSIG(status);
@@ -378,11 +520,14 @@ void process_child_events(void)
 
         fflush(stdout);
 
+        /*
+         * Remove completed process from job table.
+         */
         remove_job(index);
     }
 
     /*
-     * All events have now been processed.
+     * All recorded events have been processed.
      */
     child_event_count = 0;
 }

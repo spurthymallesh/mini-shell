@@ -66,3 +66,26 @@ void update_job_state(pid_t pid, job_state state)
         jobs[index].state = state;
     }
 }
+
+int execute_jobs(void)
+{
+    int i;
+
+    for (i = 0; i < job_count; i++)
+    {
+        if (jobs[i].state == JOB_RUNNING)
+        {
+            printf("[%d] Running    %s\n",
+                   jobs[i].job_id,
+                   jobs[i].command);
+        }
+        else if (jobs[i].state == JOB_STOPPED)
+        {
+            printf("[%d] Stopped    %s\n",
+                   jobs[i].job_id,
+                   jobs[i].command);
+        }
+    }
+
+    return 0;
+}
