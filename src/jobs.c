@@ -1,5 +1,8 @@
 #include "minishell.h"
 
+extern int last_exit_status;
+extern pid_t foreground_pid;
+
 void add_job(pid_t pid, job_state state, const char *command)
 {
     if (job_count >= MAX_JOBS)
@@ -162,6 +165,129 @@ int execute_bg(char **args)
            jobs[index].command);
 
     fflush(stdout);
+
+    return 0;
+}
+
+int execute_fg(char **args)
+{
+    int index = -1;
+    pid_t pid;
+    int status;
+
+    /*
+     * fg without PID:
+     * select the most recently created job.
+     */
+    if (args[1] == NULL)
+    {
+        if (job_count > 0)
+        {
+            index = job_count - 1;
+        }
+    }
+    else
+    {
+        /*
+         * fg <pid>
+         */
+        pid = (pid_t)atoi(args[1]);
+
+        index = find_job_by_pid(pid);
+    }
+
+    /*
+     * No matching job.
+     */
+    if (index == -1)
+    {
+        fprintf(stderr, "msh: fg: no such job\n");
+        return 1;
+    }
+
+    pid = jobs[index].pid;
+
+    /*
+     * Bring the process into foreground.
+     */
+    foreground_pid = pid;
+
+    /*
+     * If the process was stopped,
+     * continue it first.
+     */
+    if (jobs[index].state == JOB_STOPPED)
+    {
+        if (kill(pid, SIGCONT) < 0)
+        {
+            perror("kill");
+            foreground_pid = -1;
+            return 1;
+        }
+    }
+
+    /*
+     * Mark it as running.
+     */
+    jobs[index].state = JOB_RUNNING;
+
+    /*
+     * Wait for the foreground process.
+     */
+    if (waitpid(pid, &status, WUNTRACED) < 0)
+    {
+        if (errno == EINTR)
+        {
+            /*
+             * Signal interrupted wait.
+             * The signal handler will handle Ctrl+C/Ctrl+Z.
+             */
+        }
+        else
+        {
+            perror("waitpid");
+        }
+
+        foreground_pid = -1;
+        return 1;
+    }
+
+    /*
+     * Process completed normally.
+     */
+    if (WIFEXITED(status))
+    {
+        last_exit_status = WEXITSTATUS(status);
+
+        remove_job(index);
+    }
+
+    /*
+     * Process was terminated by a signal.
+     */
+    else if (WIFSIGNALED(status))
+    {
+        last_exit_status = 128 + WTERMSIG(status);
+
+        remove_job(index);
+    }
+
+    /*
+     * Process was stopped again using Ctrl+Z.
+     */
+    else if (WIFSTOPPED(status))
+    {
+        jobs[index].state = JOB_STOPPED;
+
+        printf("\n[%d] Stopped\n",
+               jobs[index].job_id);
+
+        fflush(stdout);
+
+        last_exit_status = 128 + WSTOPSIG(status);
+    }
+
+    foreground_pid = -1;
 
     return 0;
 }

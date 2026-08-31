@@ -67,5 +67,6 @@ void update_job_state(pid_t pid, job_state state);
 void process_child_events(void);
 int execute_jobs(void);
 int execute_bg(char **args);
+int execute_fg(char **args);
 
 #endif
